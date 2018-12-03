@@ -2,6 +2,7 @@ import { Component, OnInit, Input, Output, EventEmitter  } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
 import { RequestService, DataCacheService, MessageService , AuthenticationService } from '../../core/services/index';
 import { ToasterService} from 'angular2-toaster';
+import * as moment from 'moment';
 import 'rxjs/Rx';
 import { Observable } from 'rxjs/Rx';
 import { Subscription } from 'rxjs/Subscription';
@@ -142,6 +143,7 @@ export class ServiceOverviewMultienvComponent implements OnInit {
   activeEnv: string = 'dev';
   Environments = [];
   environ_arr = [];
+  deployments_arr = [];
 
   // prodEnv:any;
   // stgEnv:any;
@@ -267,25 +269,26 @@ export class ServiceOverviewMultienvComponent implements OnInit {
         if (this.environ_arr[i].logical_id == 'stg') {
           this.stgEnv = this.environ_arr[i];
           continue;
-        } else {
-          if (this.environ_arr[i].status !== 'archived') {
-            this.Environments[j] = this.environ_arr[i];
-            this.envList[k] = this.environ_arr[i].logical_id;
-            if (this.environ_arr[i].friendly_name != undefined) {
-              this.friendlist[k++] = this.environ_arr[i].friendly_name;
-            } else {
-              this.friendlist[k++] = this.environ_arr[i].logical_id;
-            }
-            j++;
-          }
         }
+       
+        if (this.environ_arr[i].status !== 'archived') {
+          this.Environments[j] = this.environ_arr[i];
+          this.envList[k] = this.environ_arr[i].logical_id;
+          if (this.environ_arr[i].friendly_name != undefined) {
+            this.friendlist[k++] = this.environ_arr[i].friendly_name;
+          } else {
+            this.friendlist[k++] = this.environ_arr[i].physical_id || this.environ_arr[i].logical_id;
+          }
+          j++;
+        }
+        
       }
       this.list = {
         env: this.envList,
         friendly_name: this.friendlist
       }
     }
-
+    
     if (this.Environments.length == 0) {
       this.noSubEnv = true;
     }
@@ -339,7 +342,7 @@ export class ServiceOverviewMultienvComponent implements OnInit {
     this.http.get('/jazz/environments?domain=' + this.service.domain + '&service=' + this.service.name).subscribe(
       response => {
 
-        this.isenvLoading = false;
+        //this.isenvLoading = false;
         this.environ_arr = response.data.environment;
         if (this.environ_arr != undefined)
           if (this.environ_arr.length == 0 || response.data == '') {
@@ -372,7 +375,84 @@ export class ServiceOverviewMultienvComponent implements OnInit {
         // let errorMessage=this.toastmessage.errorMessage(err,"serviceCost");
         // this.popToast('error', 'Oops!', errorMessage);
       })
+      this.getDeploymentData();
   };
+
+  getLastDeployment(deploymentArray, status){
+    if (!deploymentArray) return "NA"
+    for (var i = 0; i < deploymentArray.length; i++){
+      var deployment = deploymentArray[i];
+      if (deployment.status == status){
+        var time = deployment.created_time.slice(0,-4);
+        // time format is UTC, need to convert to local time
+        time = moment.utc(time).local();
+        // get local time
+        var now = new Date;
+        var diff = moment(now).diff(moment(time),"second");
+        if (diff <= 24 * 60 * 60) {
+          // time format is UTC, need to convert to local time
+          return moment(time).fromNow();
+        } else {
+          return moment(time).format('ll');
+        }
+      }
+    }    
+  }
+
+  get24HourDeployment(env){
+    var count = 0;
+    if (!env.deploy_arr) return 'NA'
+    for (var i = 0; i < env.deploy_arr.length; i++){
+      var time = env.deploy_arr[i].created_time.slice(0,-4);
+      // time format is UTC, need to convert to local time
+      time = moment.utc(time).local();
+      // get local time
+      var now = new Date;
+      var diff = moment(now).diff(moment(time),"second");
+      if (diff <= 24 * 60 * 60) {
+        count ++
+      }
+    }
+    // return as string so when the count it 0, it won't be treat as false in html (count || 'NA') => 0 will be shown as 'NA'
+    return count.toString()
+  }
+
+  getDeploymentData() {
+    if (this.service == undefined) { return }
+    this.http.get('/jazz/deployments?domain=' + this.service.domain + '&service=' + this.service.name).subscribe(
+      response => {
+        this.isenvLoading = false;
+        //this.environ_arr = response.data.environment;
+
+        this.deployments_arr = response.data.deployments;
+
+        this.deployments_arr.map((deployment)=>{
+          if (deployment.environment_logical_id == 'stg') {
+            this.stgEnv.deploy_arr = this.stgEnv.deploy_arr || [];
+            this.stgEnv.deploy_arr.push(deployment);
+          } else if (deployment.environment_logical_id == 'prod'){
+            this.prodEnv.deploy_arr = this.prodEnv.deploy_arr || [];
+            this.prodEnv.deploy_arr.push(deployment);
+          }
+        })
+
+        this.Environments.map((item)=>{
+          item.status = item.status.replace('_', ' ');
+        })
+        this.stgEnv.status = this.stgEnv.status.replace('_', ' ');
+        this.stgEnv.lastSuccessfulDeployment = this.getLastDeployment(this.stgEnv.deploy_arr, "successful");
+        this.stgEnv.lastFailedDeployment = this.getLastDeployment(this.stgEnv.deploy_arr, "failed")
+        this.stgEnv.deploymentsCountvalue = this.get24HourDeployment(this.stgEnv);
+        this.prodEnv.status = this.prodEnv.status.replace('_', ' ');
+        this.prodEnv.lastSuccessfulDeployment = this.getLastDeployment(this.prodEnv.deploy_arr, "successful");
+        this.prodEnv.lastFailedDeployment = this.getLastDeployment(this.prodEnv.deploy_arr, "failed");
+        this.prodEnv.deploymentsCountvalue = this.get24HourDeployment(this.prodEnv);
+      },
+      err => {
+        console.log('error', err);
+      })
+  }
+
   getTime() {
     var now = new Date();
     this.errorTime = ((now.getMonth() + 1) + '/' + (now.getDate()) + '/' + now.getFullYear() + " " + now.getHours() + ':' +
@@ -422,7 +502,7 @@ export class ServiceOverviewMultienvComponent implements OnInit {
     var arrEnv = data.data.environment
     if (environment.multi_env) {
       for (var i = 0; i < arrEnv.length; i++) {
-        arrEnv[i].status = arrEnv[i].status.replace('_', ' ');
+        //arrEnv[i].status = arrEnv[i].status.replace('_', ' ');
         if (arrEnv[i].logical_id == 'prod')
           this.prodEnv = arrEnv[i];
         else
@@ -430,7 +510,7 @@ export class ServiceOverviewMultienvComponent implements OnInit {
       }
     } else {
       for (var i = 0; i < arrEnv.length; i++) {
-        arrEnv[i].status = arrEnv[i].status.replace('_', ' ');
+        //arrEnv[i].status = arrEnv[i].status.replace('_', ' ');
         if (arrEnv[i].logical_id == 'prod')
           this.prodEnv = arrEnv[i];
         else
