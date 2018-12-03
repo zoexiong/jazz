@@ -6,11 +6,13 @@ import { DataService } from "../data-service/data.service";
 import { DataCacheService , AuthenticationService } from '../../core/services/index';
 import { environment } from './../../../environments/environment';
 import { environment as env_internal } from './../../../environments/environment.internal';
+import { environmentDataService } from '../../core/services/environments.service';  
+import * as moment from 'moment';
 
 @Component({
   selector: 'env-overview-section',
   templateUrl: './env-overview-section.component.html',
-  providers: [RequestService,MessageService,DataService],
+  providers: [RequestService,MessageService,DataService,environmentDataService],
   styleUrls: ['./env-overview-section.component.scss']
 })
 export class EnvOverviewSectionComponent implements OnInit {
@@ -39,11 +41,13 @@ export class EnvOverviewSectionComponent implements OnInit {
   editBtn:boolean = true;
   saveBtn:boolean = false;
   showCancel:boolean = false;
-  environmnt:any;
+  environment:any;
+  deployments:any={};
   envResponseEmpty:boolean = false;
   envResponseTrue:boolean = false;
   envResponseError:boolean = false;
   isLoading: boolean = true;
+  isDeploymentLoading: boolean = true;
   dayscommit: boolean = false;
   hourscommit: boolean = false;
   seccommit: boolean = false;
@@ -69,6 +73,7 @@ export class EnvOverviewSectionComponent implements OnInit {
   
   
   private subscription:any;
+  private deploySubscription:any;
 
   @Input() service: any = {};
   
@@ -92,7 +97,7 @@ export class EnvOverviewSectionComponent implements OnInit {
     private toasterService: ToasterService,
     private messageservice:MessageService,
     private data: DataService,
-
+    private environmentDataService: environmentDataService,
     private authenticationservice: AuthenticationService ,
   ) {
     this.http = request;
@@ -105,6 +110,8 @@ export class EnvOverviewSectionComponent implements OnInit {
     this.envResponseTrue = false;
     this.envResponseError = false;
     this.isLoading = true;
+    this.isDeploymentLoading = true;
+    this.clearEnvCache();
     this.ngOnInit();
   }
   //  prd?domain=jazz-testing&service=test-create
@@ -138,6 +145,8 @@ popup(state){
     var errMsgBody;
 
     if(this.friendlyChanged){
+      // clear cache and fetch env again
+      this.clearEnvCache();
       this.put_payload.friendly_name= this.tempFriendlyName;
       this.http.put('/jazz/environments/'+ this.env +'?domain=' + this.service.domain + '&service=' + this.service.name,this.put_payload)
             .subscribe(
@@ -170,6 +179,11 @@ popup(state){
     }
     
   }
+
+  clearEnvCache(){
+    this.environmentDataService.clearEnvironmentCache(this.service.domain, this.service.name, this.env);
+  }
+
   onCancelClick(){
     this.showCancel=false;
     this.saveBtn=false;
@@ -217,68 +231,125 @@ popup(state){
   }
   openSidebar(){
     this.open_sidebar.emit(true);
+  }
 
-}
-   callServiceEnv() {
-    
-    
-    if ( this.subscription ) {
-      this.subscription.unsubscribe();
+  get24HourDeployment(deploymentsArray){
+    var count = 0;
+    if (!deploymentsArray) return 'NA'
+    for (var i = 0; i < deploymentsArray.length; i++){
+      var time = deploymentsArray[i].created_time.slice(0,-4);
+      // time format is UTC, need to convert to local time
+      time = moment.utc(time).local();
+      // get local time
+      var now = new Date;
+      var diff = moment(now).diff(moment(time),"second");
+      if (diff <= 24 * 60 * 60) {
+        count ++
+      }
     }
-    this.onload.emit(this.environmnt.endpoint);
+    // return as string so when the count it 0, it won't be treat as false in html (count || 'NA') => 0 will be shown as 'NA'
+    return count.toString();
+  }
 
-    this.subscription = this.http.get('/jazz/environments/'+ this.env +'?domain=' + this.service.domain + '&service=' + this.service.name).subscribe(
-      // this.http.get('/jazz/environments/prd?domain=jazz-testing&service=test-create').subscribe(
-        (response) => {
+  getLastDeployment(deploymentArray, status){
+    if (!deploymentArray) return "NA"
+    for (var i = 0; i < deploymentArray.length; i++){
+      var deployment = deploymentArray[i];
+      if (deployment.status == status){
+        var time = deployment.created_time.slice(0,-4);
+        // time format is UTC, need to convert to local time
+        time = moment.utc(time).local();
+        // get local time
+        var now = new Date;
+        var diff = moment(now).diff(moment(time),"second");
+        if (diff <= 24 * 60 * 60) {
+          return moment(time).fromNow();
+        } else {
+          return moment(time).format('ll');
+        }
+      }
+    }    
+  }
+   
+  getDeployments(){
+    if (!this.env || !this.service.domain ||!this.service.name) {
+      return
+    }
+    this.deploySubscription = this.http.get('/jazz/deployments' + '?domain=' + this.service.domain + '&service=' + this.service.name + "&environment=" + this.env).subscribe(
+      (response) => {
+        if(response.data == (undefined || '')){
+          this.isDeploymentLoading = false;
+          return
+        }else if (response.data.deployments){
+          this.isDeploymentLoading = false;
+          this.deployments = response.data;
+          this.deployments.deploymentsCountvalue = this.get24HourDeployment(this.deployments.deployments);
+          this.deployments.lastSuccessfulDeployment = this.getLastDeployment(this.deployments.deployments, 'successful');
+          this.deployments.lastFailedDeployment = this.getLastDeployment(this.deployments.deployments, 'failed');
+          this.deployments.lastDeploymentStatus = this.deployments.deployments[0]? this.deployments.deployments[0].status : 'NA';
+          this.cache.set('currentDeployments', this.deployments);
+        }
+      },
+      (error) => {
+        this.envResponseTrue = false;
+        this.envResponseError = true;
+        this.envResponseEmpty = false;
+        this.isLoading = false;
+        this.isDeploymentLoading = false;
+    })
+  }
 
-          if(response.data == (undefined || '')){
-           
-            this.envResponseEmpty = true; 
-            this.isLoading = false;
-          }else{
-            // response.data.environment[0].status='deletion_started'
-            this.onload.emit(response.data.environment[0].endpoint);
-            this.envLoad.emit(response.data);
-            this.environmnt=response.data.environment[0];
-            this.cache.set('currentEnv',this.environmnt);
-            this.status_val = parseInt(status[this.environmnt.status]);
+  getEnvironment(response){
+    if (response) {
+      if(response.data == (undefined || '')){
+        this.envResponseEmpty = true; 
+        this.isLoading = false;
+      }else{
+        // response.data.environment[0].status='deletion_started'
+        this.onload.emit(response.data.environment[0].endpoint);
+        this.envLoad.emit(response.data);
+        this.environment=response.data.environment[0];
+        this.cache.set('currentEnv',this.environment);
+        this.status_val = parseInt(status[this.environment.status]);
 
-            var deployment_status = ["deployment_completed","active","deployment_started" ,"pending_approval","deployment_failed","inactive","deletion_started","deletion_failed","archived"]
+        var deployment_status = ["deployment_completed","active","deployment_started" ,"pending_approval","deployment_failed","inactive","deletion_started","deletion_failed","archived"]
 
-            this.envstatus = deployment_status[this.status_val].replace("_"," ");
+        this.envstatus = deployment_status[this.status_val].replace("_"," ");
 
-            var envResponse = response.data.environment[0];
-            this.friendlyName = envResponse.friendly_name
-            this.branchname = envResponse.physical_id;
-            this.lastCommitted = envResponse.last_updated;
-            this.frndload.emit(this.friendlyName);
+        var envResponse = response.data.environment[0];
+        this.friendlyName = envResponse.friendly_name
+        this.branchname = envResponse.physical_id;
+        this.lastCommitted = envResponse.last_updated;
+        this.frndload.emit(this.friendlyName);
 
-            this.formatLastCommit();               
-            
-            this.envResponseTrue = true;
-            this.envResponseEmpty = false;
-            this.isLoading = false;
-          }
-        },
-        (error) => {
-          if( error.status == "404"){
-            this.router.navigateByUrl('404');
-          }
-          this.envResponseTrue = false;
-          this.envResponseError = true;
-          this.envResponseEmpty = false;
-          this.isLoading = false;
-          var payload ={
-            "service" : this.service.name,
-            "domain" : this.service.domain,         }
-          this.getTime();
-          this.errorURL = window.location.href;
-          this.errorAPI = env_internal.baseurl+"/jazz/environment/"+this.env;
-          this.errorRequest = payload;
-          this.errorUser = this.authenticationservice.getUserId();
-          this.errorResponse = JSON.parse(error._body);  
-      })
-    };
+
+        this.formatLastCommit();               
+        
+        this.envResponseTrue = true;
+        this.envResponseEmpty = false;
+        this.isLoading = false;
+      }
+    } else {
+      // if( error.status == "404"){
+      //   this.router.navigateByUrl('404');
+      // }
+      this.envResponseTrue = false;
+      this.envResponseError = true;
+      this.envResponseEmpty = false;
+      this.isLoading = false;
+    }
+  }
+
+  callServiceEnv() {
+    var env = this.cache.get(this.service.domain + '/' + this.service.name + '/' + this.env);
+    if (env) {
+      this.onload.emit(this.environment.endpoint);
+      this.getEnvironment(env);
+      return
+    }
+    this.environmentDataService.getEnvironment(this.service.domain, this.service.name, this.env);
+  };
+
   
     getTime() {
       var now = new Date();
@@ -419,9 +490,13 @@ form_endplist(){
   ngOnInit() {  
     this.form_endplist();
     if(environment.envName=='oss')this.isOSS=true;
-    if(this.service.domain != undefined)  
+    if(this.service.domain != undefined){
+      this.environmentDataService.environment.subscribe((res) => {
+        this.getEnvironment(res)
+      });
       this.callServiceEnv();
-      this.data.currentMessage.subscribe(message => this.message = message)
+      //this.data.currentMessage.subscribe(message => this.message = message)
+    }       
   }
 
   ngOnChanges(x:any) {
@@ -429,9 +504,11 @@ form_endplist(){
       params => {
       this.env = params.env;
     });
-    this.environmnt={};
-    if(this.service.domain != undefined)
+    this.environment={};
+    if(this.service.domain != undefined){
       this.callServiceEnv();
+      this.getDeployments();
+    }
 }
 notify(services){
   this.service=services;

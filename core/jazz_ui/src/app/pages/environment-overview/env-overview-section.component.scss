@@ -140,6 +140,16 @@
 
 .overview-value {
   color: #000000;
+  text-transform: capitalize;
+}
+
+.icon-icon-good, .icon-icon-bad{
+  font-size: 2rem !important;
+}
+
+.icon-icon-bad span, .icon-icon-good span {
+  font-size: 2rem !important;
+  margin-left: 0 !important;
 }
 
 .overview-label {
